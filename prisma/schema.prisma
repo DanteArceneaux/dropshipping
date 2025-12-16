@@ -1,0 +1,84 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProductStatus {
+  DETECTED
+  VETTED
+  APPROVED
+  REJECTED
+  READY_FOR_VIDEO
+  READY_TO_LIST
+  LISTED
+}
+
+model Product {
+  id          String        @id @default(uuid())
+  externalUrl String        @unique
+  title       String?
+  description String?
+  
+  // Scoring
+  viralScore  Int           @default(0)
+  sentiment   Int           @default(0)
+  
+  // Sourcing
+  supplierUrl String?
+  costPrice   Decimal?      @db.Decimal(10, 2)
+  
+  status      ProductStatus @default(DETECTED)
+  
+  marketingCopy Json?         // { title, description, hooks }
+  videoScript   Json?         // { scenes: [] }
+  
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  logs        AgentLog[]
+}
+
+enum JobType {
+  SCRAPE
+  VET
+  COPYWRITE
+  RENDER_VIDEO
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Job {
+  id        String    @id @default(uuid())
+  type      JobType
+  payload   Json
+  result    Json?
+  status    JobStatus @default(PENDING)
+  error     String?
+  
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model AgentLog {
+  id        String   @id @default(uuid())
+  agentName String   // "Discovery", "Sourcing"
+  decision  String   // "APPROVED", "REJECTED"
+  reason    String
+  
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  
+  createdAt DateTime @default(now())
+}
