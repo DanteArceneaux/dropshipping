@@ -1,44 +1,36 @@
 import { ScrapeJobPayload, ProductCandidate } from '../../shared/types';
 import { logger } from '../../shared/logger';
-import { TikTokScraper } from './tiktok';
+import { YouTubeScraper } from './youtube';
 
 export class ScraperEngine {
-  private tiktokScraper: TikTokScraper;
+  private youtubeScraper: YouTubeScraper;
 
   constructor() {
-    this.tiktokScraper = new TikTokScraper();
+    this.youtubeScraper = new YouTubeScraper();
   }
 
   async init() {
-    await this.tiktokScraper.init();
+    await this.youtubeScraper.init();
   }
 
   async close() {
-    await this.tiktokScraper.close();
+    await this.youtubeScraper.close();
   }
   
   async processJob(job: ScrapeJobPayload): Promise<ProductCandidate> {
-    if (job.source !== 'tiktok' && job.source !== 'instagram') {
-      throw new Error(`Unsupported platform: ${job.source}`);
-    }
-
-    if (job.source === 'tiktok') {
-        if (job.hashtag) {
-            const results = await this.tiktokScraper.scrapeHashtag(job.hashtag, job.limit || 5);
-            if (results.length > 0) {
-                return results[0]; // For now, just return the first one as single job result
-            }
-            throw new Error(`No results found for hashtag #${job.hashtag}`);
+    // We treat 'tiktok' jobs as generic 'viral video' jobs and route them to YouTube
+    // if the user still sends 'tiktok' as the source.
+    
+    if (job.hashtag) {
+        // Search for "hashtag + shorts" or just the query
+        const query = `${job.hashtag} shorts`; 
+        const results = await this.youtubeScraper.scrapeHashtag(query, job.limit || 5);
+        if (results.length > 0) {
+            return results[0]; // Return the first hit
         }
-        // Fallback for single URL if needed, or implement scrapeUrl in TikTokScraper
-        throw new Error('Direct URL scraping not yet implemented in TikTokScraper');
+        throw new Error(`No results found for query "${query}"`);
     }
 
-    throw new Error('Not implemented for this job type');
-  }
-
-  // Deprecated mock method
-  async fetchTikTokData(url: string): Promise<any> {
-    return {};
+    throw new Error('Direct URL scraping not yet implemented');
   }
 }

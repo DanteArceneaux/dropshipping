@@ -1,9 +1,13 @@
 import React from 'react';
-import { Sequence, Series } from 'remotion';
+import { Series } from 'remotion';
 import { Scene, SceneProps } from './Scene';
 
+// Re-export for external use
+export type SceneData = SceneProps;
+
 export interface AdCompositionProps {
-  scenes: SceneProps[];
+  scenes: SceneData[];
+  [key: string]: unknown;
 }
 
 export const AdComposition: React.FC<AdCompositionProps> = ({ scenes }) => {

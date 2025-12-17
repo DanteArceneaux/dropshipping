@@ -41,6 +41,10 @@ async function startWorker() {
         });
 
         logger.info(`✅ Saved product: ${product.id} (${product.title})`);
+        
+        // Push to Discovery Queue to start the Brain pipeline
+        await redis.lpush(QUEUES.DISCOVERY, product.id);
+        logger.info(`🚀 Pushed to DISCOVERY queue: ${product.id}`);
       }
     } catch (error) {
       logger.error(`Error processing job: ${error}`);

@@ -4,10 +4,23 @@ import { renderMedia, selectComposition } from '@remotion/renderer';
 import { VideoScriptResult } from '../brain/video';
 import { VoiceoverService } from './voiceover';
 import { logger } from '../../shared/logger';
-import { AdCompositionProps } from '../../video/AdComposition';
+import { AdCompositionProps, SceneData } from '../../video/AdComposition';
+import type { WebpackConfiguration } from '@remotion/bundler';
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+const FRAMES_PER_SECOND = 30;
+const MIN_SCENE_DURATION_SECONDS = 2;
+const WORDS_PER_SECOND = 2; // Conservative estimate
+
+// ============================================================================
+// Implementation
+// ============================================================================
 
 export class VideoRenderer {
-  private voiceoverService: VoiceoverService;
+  private readonly voiceoverService: VoiceoverService;
 
   constructor() {
     this.voiceoverService = new VoiceoverService();
@@ -16,49 +29,70 @@ export class VideoRenderer {
   async renderVideo(script: VideoScriptResult, images: string[]): Promise<string> {
     logger.info('Starting video rendering process...');
 
-    // 1. Prepare assets (voiceovers)
-    const scenesData = [];
-    
-    // We loop through scenes. If we have more scenes than images, we reuse images.
+    // Step 1: Prepare scene assets (voiceovers + timing)
+    const scenesData = await this.prepareScenes(script, images);
+
+    // Step 2: Bundle Remotion project
+    const bundleLocation = await this.bundleProject();
+
+    // Step 3: Render final video
+    const outputLocation = await this.renderToFile(bundleLocation, scenesData);
+
+    logger.info('Video rendering complete!');
+    return outputLocation;
+  }
+
+  private async prepareScenes(
+    script: VideoScriptResult,
+    images: string[]
+  ): Promise<SceneData[]> {
+    const scenes: SceneData[] = [];
+
     for (let i = 0; i < script.scenes.length; i++) {
       const scene = script.scenes[i];
-      const image = images[i % images.length]; // Cycle images
-      
+      const image = images[i % images.length]; // Cycle images if needed
+
       logger.debug(`Processing scene ${i + 1}: ${scene.visual}`);
 
-      // Generate TTS
       const audioPath = await this.voiceoverService.generateAudio(scene.audio);
+      const durationInFrames = this.estimateDuration(scene.audio);
 
-      // Estimate duration: 1 sec per 15 chars + buffer, or use a fixed calculation
-      // In a real app, we would get exact duration of the mp3 file using `music-metadata` or `mp3-duration`
-      // For MVP, we estimate: 30 frames = 1 second. Avg speaking rate ~150wpm.
-      const wordCount = scene.audio.split(' ').length;
-      const estimatedSeconds = Math.max(2, wordCount * 0.5); // Min 2 seconds
-      const durationInFrames = Math.ceil(estimatedSeconds * 30);
-
-      scenesData.push({
+      scenes.push({
         image,
         audio: audioPath,
-        caption: scene.visual, // Using visual description as caption for now, ideally strictly the speech
+        caption: scene.visual,
         durationInFrames
       });
     }
 
-    // 2. Bundle Remotion project
-    const entryPoint = path.resolve(process.cwd(), 'src/video/index.ts');
-    
-    // Create entry point if not exists (Remotion needs an index that exports registerRoot)
-    // We will create it dynamically or assume it exists. Let's create it in step 5 if needed.
-    // Actually, let's just point to Root.tsx if we setup correctly, but standard is index.ts
-    
-    logger.info('Bundling Remotion project...');
-    const bundleLocation = await bundle({
-      entryPoint,
-      webpackOverride: (config) => config, // Default
-    });
+    return scenes;
+  }
 
-    // 3. Render
-    const inputProps: AdCompositionProps & Record<string, unknown> = {
+  private estimateDuration(audioText: string): number {
+    const wordCount = audioText.split(/\s+/).length;
+    const estimatedSeconds = Math.max(
+      MIN_SCENE_DURATION_SECONDS,
+      wordCount / WORDS_PER_SECOND
+    );
+    return Math.ceil(estimatedSeconds * FRAMES_PER_SECOND);
+  }
+
+  private async bundleProject(): Promise<string> {
+    const entryPoint = path.resolve(process.cwd(), 'src/video/index.ts');
+
+    logger.info('Bundling Remotion project...');
+    
+    return bundle({
+      entryPoint,
+      webpackOverride: (config: WebpackConfiguration) => config,
+    });
+  }
+
+  private async renderToFile(
+    bundleLocation: string,
+    scenesData: SceneData[]
+  ): Promise<string> {
+    const inputProps: AdCompositionProps = {
       scenes: scenesData
     };
 
@@ -69,10 +103,13 @@ export class VideoRenderer {
       inputProps,
     });
 
-    const outputLocation = path.resolve(process.cwd(), `out/video-${Date.now()}.mp4`);
+    const outputLocation = path.resolve(
+      process.cwd(),
+      `out/video-${Date.now()}.mp4`
+    );
 
     logger.info(`Rendering video to ${outputLocation}...`);
-    
+
     await renderMedia({
       composition,
       serveUrl: bundleLocation,
@@ -81,7 +118,6 @@ export class VideoRenderer {
       inputProps,
     });
 
-    logger.info('Video rendering complete!');
     return outputLocation;
   }
 }

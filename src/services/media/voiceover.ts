@@ -4,22 +4,50 @@ import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 import { openai } from '../../shared/llm';
 import { logger } from '../../shared/logger';
 
-// Type definitions
+// ============================================================================
+// Type Definitions
+// ============================================================================
+
 type OpenAIVoice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
 type VoiceProvider = 'google' | 'openai' | 'mock';
 
+const VALID_OPENAI_VOICES: readonly OpenAIVoice[] = [
+  'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'
+] as const;
+
+// ============================================================================
+// WAV Constants for Mock Audio
+// ============================================================================
+
+const WAV_CONFIG = {
+  sampleRate: 44100,
+  numChannels: 1,
+  bitsPerSample: 16,
+  durationSeconds: 2
+} as const;
+
+// ============================================================================
+// Implementation
+// ============================================================================
+
 export class VoiceoverService {
-  private outputDir: string;
+  private readonly outputDir: string;
   private googleClient: TextToSpeechClient | null = null;
   private provider: VoiceProvider = 'mock';
 
   constructor() {
     this.outputDir = path.resolve(process.cwd(), 'public/audio');
+    this.ensureOutputDir();
+    this.initializeProvider();
+  }
+
+  private ensureOutputDir(): void {
     if (!fs.existsSync(this.outputDir)) {
       fs.mkdirSync(this.outputDir, { recursive: true });
     }
+  }
 
-    // Initialize Providers
+  private initializeProvider(): void {
     if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
       try {
         this.googleClient = new TextToSpeechClient();
@@ -37,10 +65,8 @@ export class VoiceoverService {
   }
 
   async generateAudio(text: string, voicePreference: string = 'onyx'): Promise<string> {
-    const safeText = text.slice(0, 50).replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    
-    // Determine extension based on provider
-    const ext = this.provider === 'openai' ? 'mp3' : 'mp3'; // Google also supports mp3
+    const safeText = this.sanitizeFilename(text);
+    const ext = 'mp3'; // Both Google and OpenAI support MP3
     const filename = `${Date.now()}_${safeText}.${ext}`;
     const filePath = path.join(this.outputDir, filename);
     const relativePath = `/audio/${filename}`;
@@ -48,27 +74,47 @@ export class VoiceoverService {
     logger.info(`Generating voiceover [${this.provider}]: "${text.substring(0, 30)}..."`);
 
     try {
-      if (this.provider === 'google' && this.googleClient) {
-        await this.generateGoogleAudio(text, filePath);
-      } else if (this.provider === 'openai') {
-        await this.generateOpenAIAudio(text, filePath, voicePreference as OpenAIVoice);
-      } else {
-        await this.generateMockAudio(filePath);
-      }
-      
+      await this.generateWithProvider(text, filePath, voicePreference);
       return relativePath;
-
     } catch (error) {
       logger.error(`Voiceover generation failed: ${error}`);
-      // Fallback to mock if real generation fails
-      if (this.provider !== 'mock') {
-        logger.warn('Falling back to mock audio due to error.');
-        const mockPath = filePath.replace(`.${ext}`, '_mock.wav');
-        await this.generateMockAudio(mockPath);
-        return `/audio/${path.basename(mockPath)}`;
-      }
-      throw error;
+      return this.handleFallback(filePath, ext);
     }
+  }
+
+  private sanitizeFilename(text: string): string {
+    return text.slice(0, 50).replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  }
+
+  private async generateWithProvider(
+    text: string,
+    filePath: string,
+    voicePreference: string
+  ): Promise<void> {
+    switch (this.provider) {
+      case 'google':
+        if (!this.googleClient) {
+          throw new Error('Google client not initialized');
+        }
+        await this.generateGoogleAudio(text, filePath);
+        break;
+      case 'openai':
+        await this.generateOpenAIAudio(text, filePath, voicePreference as OpenAIVoice);
+        break;
+      default:
+        await this.generateMockAudio(filePath);
+    }
+  }
+
+  private async handleFallback(filePath: string, ext: string): Promise<string> {
+    if (this.provider === 'mock') {
+      throw new Error('Mock audio generation failed');
+    }
+
+    logger.warn('Falling back to mock audio due to error.');
+    const mockPath = filePath.replace(`.${ext}`, '_mock.wav');
+    await this.generateMockAudio(mockPath);
+    return `/audio/${path.basename(mockPath)}`;
   }
 
   private async generateGoogleAudio(text: string, filePath: string) {
@@ -94,15 +140,16 @@ export class VoiceoverService {
     await fs.promises.writeFile(filePath, response.audioContent, 'binary');
   }
 
-  private async generateOpenAIAudio(text: string, filePath: string, voice: OpenAIVoice) {
-    // OpenAI supports: alloy, echo, fable, onyx, nova, shimmer
-    // We map arbitrary strings to a default if needed
-    const validVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
-    const selectedVoice = validVoices.includes(voice) ? voice : 'onyx';
+  private async generateOpenAIAudio(
+    text: string,
+    filePath: string,
+    voice: OpenAIVoice
+  ): Promise<void> {
+    const selectedVoice = this.validateOpenAIVoice(voice);
 
     const mp3 = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: selectedVoice as OpenAIVoice,
+      model: 'tts-1',
+      voice: selectedVoice,
       input: text,
     });
 
@@ -110,46 +157,48 @@ export class VoiceoverService {
     await fs.promises.writeFile(filePath, buffer);
   }
 
-  private async generateMockAudio(filePath: string) {
-    // RIFF Header + FMT Chunk + DATA Chunk (1 second of silence)
-    // Changing extension to .wav for mock if needed, but MP3 header is harder to mock manually without encoding.
-    // So we'll write a WAV file even if extension says mp3 (players often handle this) 
-    // OR just enforce .wav for mock.
+  private validateOpenAIVoice(voice: string): OpenAIVoice {
+    return VALID_OPENAI_VOICES.includes(voice as OpenAIVoice)
+      ? (voice as OpenAIVoice)
+      : 'onyx';
+  }
+
+  private async generateMockAudio(filePath: string): Promise<void> {
+    const buffer = this.createSilentWavBuffer();
+    await fs.promises.writeFile(filePath, buffer);
+  }
+
+  private createSilentWavBuffer(): Buffer {
+    const { sampleRate, numChannels, bitsPerSample, durationSeconds } = WAV_CONFIG;
     
-    // Ideally we respect the filePath extension. If it is .mp3, we should technically write MP3 data.
-    // For simplicity, let's just write the WAV buffer we had, but change extension in caller if possible.
-    // Or just write silence.mp3 using a valid empty frame? No, WAV is safer.
-    
-    // We will just write the WAV logic we had.
-    
-    const sampleRate = 44100;
-    const numChannels = 1;
-    const bitsPerSample = 16;
-    const durationSeconds = 2;
     const numSamples = sampleRate * durationSeconds;
-    const byteRate = sampleRate * numChannels * bitsPerSample / 8;
-    const blockAlign = numChannels * bitsPerSample / 8;
-    const dataSize = numSamples * numChannels * bitsPerSample / 8;
+    const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+    const blockAlign = (numChannels * bitsPerSample) / 8;
+    const dataSize = (numSamples * numChannels * bitsPerSample) / 8;
     const fileSize = 36 + dataSize;
 
     const buffer = Buffer.alloc(44 + dataSize);
 
+    // RIFF Header
     buffer.write('RIFF', 0);
     buffer.writeUInt32LE(fileSize, 4);
     buffer.write('WAVE', 8);
+
+    // Format Chunk
     buffer.write('fmt ', 12);
-    buffer.writeUInt32LE(16, 16);
-    buffer.writeUInt16LE(1, 20);
+    buffer.writeUInt32LE(16, 16);           // Chunk size
+    buffer.writeUInt16LE(1, 20);            // Audio format (PCM)
     buffer.writeUInt16LE(numChannels, 22);
     buffer.writeUInt32LE(sampleRate, 24);
     buffer.writeUInt32LE(byteRate, 28);
     buffer.writeUInt16LE(blockAlign, 32);
     buffer.writeUInt16LE(bitsPerSample, 34);
+
+    // Data Chunk
     buffer.write('data', 36);
     buffer.writeUInt32LE(dataSize, 40);
+    // Silence (zeros) already filled by Buffer.alloc
 
-    // If filename ends in .mp3, this technically creates a malformed MP3 (it's a WAV),
-    // but many players sniff the header (RIFF) and play it anyway.
-    await fs.promises.writeFile(filePath, buffer);
+    return buffer;
   }
 }

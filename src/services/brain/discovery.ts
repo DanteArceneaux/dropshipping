@@ -21,13 +21,25 @@ export class DiscoveryAgent {
     Stats: ${JSON.stringify(product.rawStats)}
     URL: ${product.externalUrl}
     
+    CRITICAL INSTRUCTION:
+    The provided stats might be 0 due to scraper limitations. 
+    IF stats are 0 or missing, DO NOT REJECT based on "Viral Velocity".
+    Instead, assume the stats are sufficient and judge ONLY on the product concept itself.
+    If it is a physical product suitable for dropshipping (gadget, toy, home decor), APPROVE it.
+    
     Return JSON only.
     `;
 
     try {
+      // Use FAST (GPT-3.5) for speed and to avoid GPT-4 tier restrictions on new keys
       const content = await generateText(systemPrompt, userContent, 'FAST', true);
       
       const result = JSON.parse(content) as DiscoveryResult;
+      
+      if (result.verdict === 'REJECT') {
+        logger.info(`Discovery Reasoning (REJECT): ${result.reasoning}`);
+      }
+
       return result;
 
     } catch (error) {

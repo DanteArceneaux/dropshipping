@@ -8,3 +8,6 @@ coverage
 out/
 temp/
 /src/generated/prisma
+google-service-account.json
+public/audio/*.mp3
+public/audio/*.wav

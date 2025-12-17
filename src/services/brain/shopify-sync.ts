@@ -1,19 +1,73 @@
 import { shopify, session } from '../../shared/shopify';
 import { logger } from '../../shared/logger';
-import { CopywritingResult } from './copywriter';
 import fs from 'fs';
 import path from 'path';
 import { DataType } from '@shopify/shopify-api';
 
-export class ShopifySyncService {
-  async createProduct(data: {
-    title: string;
-    descriptionHtml: string;
+// ============================================================================
+// Type Definitions
+// ============================================================================
+
+interface CreateProductInput {
+  title: string;
+  descriptionHtml: string;
+  price: string;
+  vendor: string;
+  images: string[];
+  videoPath?: string;
+}
+
+interface ShopifyProductData {
+  title: string;
+  body_html: string;
+  vendor: string;
+  product_type: string;
+  images: Array<{ src: string }>;
+  variants: Array<{
     price: string;
-    vendor: string;
-    images: string[];
-    videoPath?: string;
-  }): Promise<string> {
+    inventory_management: null;
+    requires_shipping: boolean;
+  }>;
+}
+
+interface ShopifyProductResponse {
+  product: {
+    id: number;
+    admin_graphql_api_id: string;
+  };
+}
+
+interface StagedUploadTarget {
+  url: string;
+  resourceUrl: string;
+  parameters: Array<{ name: string; value: string }>;
+}
+
+interface StagedUploadsCreateResponse {
+  data: {
+    stagedUploadsCreate: {
+      stagedTargets: StagedUploadTarget[];
+    };
+  };
+}
+
+interface ProductCreateMediaResponse {
+  data: {
+    productCreateMedia: {
+      media: Array<{ id: string; status: string }>;
+      mediaUserErrors: Array<{ field: string[]; message: string }>;
+    };
+  };
+}
+
+type GraphqlClient = InstanceType<typeof shopify.clients.Graphql>;
+
+// ============================================================================
+// Implementation
+// ============================================================================
+
+export class ShopifySyncService {
+  async createProduct(data: CreateProductInput): Promise<string> {
     logger.info(`Syncing product to Shopify: ${data.title}`);
 
     if (!session.accessToken) {
@@ -33,11 +87,7 @@ export class ShopifySyncService {
     }
 
     try {
-      // Create product with REST (simpler for basic fields)
-      // Then add media if needed, or use GraphQL for everything.
-      // Mixing REST and GraphQL is fine.
-      
-      const productData: any = {
+      const productData: ShopifyProductData = {
         title: data.title,
         body_html: data.descriptionHtml,
         vendor: data.vendor,
@@ -58,15 +108,14 @@ export class ShopifySyncService {
         type: DataType.JSON,
       });
 
-      const product = (response.body as any).product;
-      const productId = product.id;
+      const body = response.body as ShopifyProductResponse;
+      const productId = body.product.id;
+      const adminGqlId = body.product.admin_graphql_api_id;
+      
       logger.info(`Successfully created Shopify product (Base): ${productId}`);
 
-      // If we have a video, we need to attach it.
-      // We can't easily attach video in the initial REST Create call (it only takes image URLs).
-      // So we use GraphQL to append the media.
       if (videoUrl) {
-        await this.attachVideoToProduct(gqlClient, product.admin_graphql_api_id, videoUrl);
+        await this.attachVideoToProduct(gqlClient, adminGqlId, videoUrl);
       }
 
       return productId.toString();
@@ -77,15 +126,29 @@ export class ShopifySyncService {
     }
   }
 
-  private async uploadVideo(client: any, videoPath: string): Promise<string> {
+  private async uploadVideo(client: GraphqlClient, videoPath: string): Promise<string> {
     logger.info(`Starting video upload for ${videoPath}`);
+    
     const stats = fs.statSync(videoPath);
     const fileSize = stats.size.toString();
     const filename = path.basename(videoPath);
     const mimeType = 'video/mp4';
 
-    // 1. Staged Uploads Create
-    const stagedUploadsQuery = `
+    // Step 1: Get staged upload URL
+    const target = await this.createStagedUpload(client, { filename, mimeType, fileSize });
+    
+    // Step 2: Upload file to staging URL
+    await this.uploadToStagingUrl(target, videoPath, mimeType, filename);
+
+    logger.info(`Video uploaded to staging URL: ${target.resourceUrl.substring(0, 50)}...`);
+    return target.resourceUrl;
+  }
+
+  private async createStagedUpload(
+    client: GraphqlClient,
+    params: { filename: string; mimeType: string; fileSize: string }
+  ): Promise<StagedUploadTarget> {
+    const query = `
       mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
         stagedUploadsCreate(input: $input) {
           stagedTargets {
@@ -100,31 +163,43 @@ export class ShopifySyncService {
       }
     `;
 
-    const stagedResult = await client.request(stagedUploadsQuery, {
+    const result = await client.request(query, {
       variables: {
         input: [{
           resource: 'VIDEO',
-          filename,
-          mimeType,
-          fileSize,
+          filename: params.filename,
+          mimeType: params.mimeType,
+          fileSize: params.fileSize,
           httpMethod: 'POST'
         }]
       }
-    });
+    }) as StagedUploadsCreateResponse;
 
-    const target = stagedResult.data.stagedUploadsCreate.stagedTargets[0];
-    const { url, parameters, resourceUrl } = target;
-
-    // 2. Upload File
-    const formData = new FormData();
-    parameters.forEach((p: any) => formData.append(p.name, p.value));
+    const target = result.data.stagedUploadsCreate.stagedTargets[0];
+    if (!target) {
+      throw new Error('Failed to get staged upload target');
+    }
     
-    // Read file as Blob for fetch (Node 20+)
+    return target;
+  }
+
+  private async uploadToStagingUrl(
+    target: StagedUploadTarget,
+    videoPath: string,
+    mimeType: string,
+    filename: string
+  ): Promise<void> {
+    const formData = new FormData();
+    
+    for (const param of target.parameters) {
+      formData.append(param.name, param.value);
+    }
+
     const fileBuffer = fs.readFileSync(videoPath);
     const fileBlob = new Blob([fileBuffer], { type: mimeType });
     formData.append('file', fileBlob, filename);
 
-    const uploadResponse = await fetch(url, {
+    const uploadResponse = await fetch(target.url, {
       method: 'POST',
       body: formData
     });
@@ -132,16 +207,15 @@ export class ShopifySyncService {
     if (!uploadResponse.ok) {
       throw new Error(`Failed to upload to staged target: ${uploadResponse.statusText}`);
     }
-
-    // 3. Return the resourceUrl directly (skipping fileCreate)
-    // This URL can be passed to productCreateMedia as originalSource
-    logger.info(`Video uploaded to staging URL: ${resourceUrl.substring(0, 50)}...`);
-    return resourceUrl;
   }
 
-  private async attachVideoToProduct(client: any, productId: string, videoUrl: string) {
+  private async attachVideoToProduct(
+    client: GraphqlClient,
+    productId: string,
+    videoUrl: string
+  ): Promise<void> {
     logger.info(`Attaching video from staging to product ${productId}`);
-    
+
     const mutation = `
       mutation productCreateMedia($media: [CreateMediaInput!]!, $productId: ID!) {
         productCreateMedia(media: $media, productId: $productId) {
@@ -165,11 +239,12 @@ export class ShopifySyncService {
           mediaContentType: 'VIDEO'
         }]
       }
-    });
+    }) as ProductCreateMediaResponse;
 
-    const data = result.data.productCreateMedia;
-    if (data.mediaUserErrors.length > 0) {
-      logger.warn(`Failed to attach video: ${JSON.stringify(data.mediaUserErrors)}`);
+    const { mediaUserErrors } = result.data.productCreateMedia;
+    
+    if (mediaUserErrors.length > 0) {
+      logger.warn(`Failed to attach video: ${JSON.stringify(mediaUserErrors)}`);
     } else {
       logger.info('Video attached successfully!');
     }

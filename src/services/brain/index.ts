@@ -6,19 +6,48 @@ import { prisma } from '../../shared/db';
 import { QUEUES } from '../../shared/types';
 import { DiscoveryAgent } from './discovery';
 import { SourcingAgent } from './sourcing';
-import { CopywriterAgent } from './copywriter';
-import { VideoScriptAgent } from './video';
+import { CopywriterAgent, CopywritingResult } from './copywriter';
+import { VideoScriptAgent, VideoScriptResult } from './video';
 import { VideoRenderer } from '../media/renderer';
 import { ShopifySyncService } from './shopify-sync';
-import { MockSupplierSearch } from './supplier-search';
+import { SerpApiSupplierSearch } from './serpapi-sourcing';
 import { logger } from '../../shared/logger';
+import type { Prisma, ProductStatus } from '@prisma/client';
+
+// ============================================================================
+// Type Definitions
+// ============================================================================
+
+interface ProductUpdateData {
+  status?: ProductStatus;
+  viralScore?: number;
+  sentiment?: number;
+  supplierUrl?: string | null;
+  costPrice?: number | Prisma.Decimal;
+  marketingCopy?: Prisma.InputJsonValue;
+  videoScript?: Prisma.InputJsonValue;
+}
+
+interface AgentLogData {
+  agentName: string;
+  decision: string;
+  reason: string;
+}
+
+// ============================================================================
+// Service Instances
+// ============================================================================
 
 const discoveryAgent = new DiscoveryAgent();
-const sourcingAgent = new SourcingAgent(new MockSupplierSearch());
+const sourcingAgent = new SourcingAgent(new SerpApiSupplierSearch());
 const copywriterAgent = new CopywriterAgent();
 const videoAgent = new VideoScriptAgent();
 const videoRenderer = new VideoRenderer();
 const shopifySync = new ShopifySyncService();
+
+// ============================================================================
+// Worker Entry Point
+// ============================================================================
 
 async function startWorker() {
   logger.info('🧠 Brain Service started (All Agents). Listening for jobs...');
@@ -75,7 +104,7 @@ async function handleDiscovery(productId: string) {
     rawStats: { views: 0, likes: 0 }
   });
 
-  const status = verdict.verdict === 'APPROVE' ? 'VETTED' : 'REJECTED';
+  const status = (verdict.verdict === 'APPROVE' ? 'VETTED' : 'REJECTED') as ProductStatus;
   
   await updateProductState(productId, {
     status,
@@ -90,6 +119,8 @@ async function handleDiscovery(productId: string) {
   if (status === 'VETTED') {
     logger.info(`🚀 Product VETTED! Pushing to Sourcing queue.`);
     await redis.lpush(QUEUES.SOURCING, product.id);
+  } else {
+    logger.info(`❌ Product REJECTED by Discovery Agent.`);
   }
 }
 
@@ -100,10 +131,10 @@ async function handleSourcing(productId: string) {
 
   const result = await sourcingAgent.source({
     title: product.title || '',
-    imageUrl: product.externalUrl
+    imageUrl: product.images?.[0] || product.externalUrl // Prefer scraped image over video URL
   });
 
-  const status = result.verdict === 'APPROVED' ? 'APPROVED' : 'REJECTED';
+  const status = (result.verdict === 'APPROVED' ? 'APPROVED' : 'REJECTED') as ProductStatus;
 
   await updateProductState(productId, {
     status,
@@ -123,7 +154,7 @@ async function handleSourcing(productId: string) {
   }
 }
 
-async function handleCopywrite(productId: string) {
+async function handleCopywrite(productId: string): Promise<void> {
   logger.info(`📝 Copywriting: Generating content for product ${productId}`);
   const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product) return;
@@ -134,8 +165,8 @@ async function handleCopywrite(productId: string) {
   });
 
   await updateProductState(productId, {
-    status: 'READY_FOR_VIDEO',
-    marketingCopy: copy as any
+    status: 'READY_FOR_VIDEO' as ProductStatus,
+    marketingCopy: JSON.parse(JSON.stringify(copy)) as Prisma.InputJsonValue
   }, {
     agentName: 'Copywriter',
     decision: 'COMPLETED',
@@ -146,16 +177,16 @@ async function handleCopywrite(productId: string) {
   await redis.lpush(QUEUES.VIDEO, product.id);
 }
 
-async function handleVideo(productId: string) {
+async function handleVideo(productId: string): Promise<void> {
   logger.info(`🎬 Video: Generating script for product ${productId}`);
   const product = await prisma.product.findUnique({ where: { id: productId } });
-  
+
   if (!product || !product.marketingCopy) {
     logger.warn(`Missing product or marketing copy for ${productId}`);
     return;
   }
 
-  const copy = product.marketingCopy as any;
+  const copy = product.marketingCopy as unknown as CopywritingResult;
   const script = await videoAgent.generateScript({
     title: product.title || '',
     copy: {
@@ -166,39 +197,40 @@ async function handleVideo(productId: string) {
   });
 
   // Render the video
-  let videoPath = null;
+  let videoPath: string | null = null;
   try {
-    // Use the scraped image if available, otherwise fallback (which might fail if not an image)
-    const images = product.images && product.images.length > 0 
-      ? product.images 
-      : [product.externalUrl]; // Dangerous fallback if externalUrl is not an image
+    const images = product.images.length > 0
+      ? product.images
+      : [product.externalUrl]; // Fallback (might fail if not an image)
 
     videoPath = await videoRenderer.renderVideo(script, images);
   } catch (renderError) {
     logger.error(`Failed to render video for ${productId}: ${renderError}`);
-    // We continue to sync even if video fails, or maybe we should fail? 
-    // For now, log and proceed (product will list without video).
+    // Continue to sync even if video rendering fails
   }
 
   await updateProductState(productId, {
-    status: 'READY_TO_LIST',
-    videoScript: script as any
+    status: 'READY_TO_LIST' as ProductStatus,
+    videoScript: JSON.parse(JSON.stringify(script)) as Prisma.InputJsonValue
   }, {
     agentName: 'VideoScript',
     decision: 'COMPLETED',
-    reason: 'Generated video script' + (videoPath ? ' and rendered video' : '')
+    reason: `Generated video script${videoPath ? ' and rendered video' : ''}`
   });
 
   logger.info(`🎞️ Video Script Ready for ${productId}! Syncing to Shopify...`);
   await handleSync(productId, videoPath);
 }
 
-// Helper to centralize DB updates
+// ============================================================================
+// Helpers
+// ============================================================================
+
 async function updateProductState(
-  productId: string, 
-  productData: any, 
-  logData: { agentName: string; decision: string; reason: string }
-) {
+  productId: string,
+  productData: ProductUpdateData,
+  logData: AgentLogData
+): Promise<void> {
   await prisma.product.update({
     where: { id: productId },
     data: productData
@@ -212,25 +244,29 @@ async function updateProductState(
   });
 }
 
-async function handleSync(productId: string, videoPath: string | null = null) {
+async function handleSync(productId: string, videoPath: string | null = null): Promise<void> {
   const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product || !product.marketingCopy) return;
 
-  const copy = product.marketingCopy as any;
-  
+  const copy = product.marketingCopy as unknown as CopywritingResult;
+
   try {
+    const priceMultiplier = 2.5;
+    const basePrice = Number(product.costPrice || 0);
+    const sellingPrice = (basePrice * priceMultiplier).toFixed(2);
+
     const shopifyId = await shopifySync.createProduct({
       title: copy.title,
       descriptionHtml: shopifySync.convertMarkdownToHtml(copy.description_md),
-      price: (Number(product.costPrice || 0) * 2.5).toFixed(2),
+      price: sellingPrice,
       vendor: 'AutoDropship',
-      images: product.images && product.images.length > 0 ? product.images : [product.externalUrl],
-      videoPath: videoPath || undefined
+      images: product.images.length > 0 ? product.images : [product.externalUrl],
+      videoPath: videoPath ?? undefined
     });
 
     await prisma.product.update({
       where: { id: productId },
-      data: { status: 'LISTED' }
+      data: { status: 'LISTED' as ProductStatus }
     });
 
     logger.info(`🛍️ LISTED ON SHOPIFY! ID: ${shopifyId}`);
