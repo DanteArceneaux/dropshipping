@@ -108,3 +108,36 @@ This document outlines standard operating procedures (SOPs) for maintaining the 
 **Cause:** Dynamic audio files must be available to the Remotion bundle server.
 **Action:** The renderer syncs generated audio into the bundle automatically; if you see this again, rebuild brain: `docker compose up -d --build brain`
 
+---
+
+## 6. Dashboard (Read-only)
+
+The system includes a read-only Kanban dashboard for visualizing pipeline progress (products + queues) with live updates via SSE.
+
+### Access (Docker)
+1. Start services:
+   - `docker compose up -d --build`
+2. Open:
+   - `http://localhost:3030`
+
+### Access (Local Dev)
+You have two options:
+
+**Option A — serve the built UI from the API (port 3030)**
+1. Install + build the dashboard UI:
+   - `npm --prefix dashboard-ui install`
+   - `npm --prefix dashboard-ui run build`
+2. Start the dashboard API:
+   - `npm run dashboard`
+3. Open:
+   - `http://localhost:3030`
+
+**Option B — Vite dev server (port 5173)**
+1. Start the dashboard API:
+   - `npm run dashboard`
+2. Start the dashboard UI dev server (proxies `/api` → `localhost:3030`):
+   - `npm --prefix dashboard-ui install`
+   - `npm --prefix dashboard-ui run dev`
+3. Open:
+   - `http://localhost:5173`
+

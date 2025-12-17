@@ -25,5 +25,14 @@ SERPAPI_KEY="your_serpapi_key_here"
 PUPPETEER_HEADLESS="true"
 
 ## Shopify
+#
+# Safety switch:
+# - Default is enabled (products will be listed/updated on Shopify).
+# - Set to "false" / "0" to disable Shopify listing (useful for local testing without spamming the store).
+SHOPIFY_ENABLED="true"
 SHOPIFY_SHOP_DOMAIN="your-shop.myshopify.com"
 SHOPIFY_ACCESS_TOKEN="shpat_..."
+
+## Dashboard (optional)
+# Dashboard API port (serves both API + built UI if available)
+DASHBOARD_API_PORT="3030"

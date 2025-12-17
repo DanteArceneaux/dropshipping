@@ -7,6 +7,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "video:test": "ts-node src/scripts/test-video-render.ts",
     "flow:test": "ts-node src/scripts/test-full-flow.ts",
+    "dashboard": "ts-node src/services/dashboard-api/index.ts",
+    "dashboard:build": "npm --prefix dashboard-ui run build",
+    "dashboard:ui": "npm --prefix dashboard-ui run dev",
     "test": "echo \"Run `npm run typecheck`, `npm run video:test`, or `npm run flow:test`\" && exit 0",
     "scraper": "ts-node src/services/scraper/index.ts",
     "brain": "ts-node src/services/brain/index.ts"

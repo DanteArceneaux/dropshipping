@@ -82,6 +82,30 @@ services:
       # Allow prompt edits without rebuilding the image (useful for tuning).
       - ./PROMPTS.md:/app/PROMPTS.md:ro
 
+  dashboard:
+    build: .
+    container_name: dropship_dashboard
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+    env_file:
+      - secrets.env
+    environment:
+      # Override local values from secrets.env when running in Docker.
+      DATABASE_URL: postgresql://admin:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-dropship_bot}?schema=public
+      REDIS_URL: redis://redis:6379
+      DASHBOARD_API_PORT: 3030
+    ports:
+      - "3030:3030"
+    command: npx ts-node src/services/dashboard-api/index.ts
+    volumes:
+      - ./logs:/app/logs
+
   adminer:
     image: adminer
     container_name: dropship_adminer

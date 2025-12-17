@@ -8,15 +8,19 @@ import { logger } from '../shared/logger';
 async function main() {
   logger.info('🚀 Starting Scraper Flow Test...');
 
+  const query = process.env.SCRAPER_TEST_QUERY || 'galaxy projector astronaut';
+  const limitRaw = Number(process.env.SCRAPER_TEST_LIMIT || 1);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 1;
+
   const job = {
-    source: 'tiktok', // We use 'tiktok' as key but it routes to YouTube now
-    hashtag: 'galaxy projector astronaut', // Distinct visual shape for easier Google Lens sourcing
-    limit: 1
+    source: 'youtube',
+    hashtag: query, // Distinct visual shape for easier Google Lens sourcing
+    limit,
   };
 
   await redis.lpush(QUEUES.SCRAPE, JSON.stringify(job));
   
-  logger.info('✅ Pushed job to SCRAPE queue. Watch the logs!');
+  logger.info(`✅ Pushed job to SCRAPE queue (query="${query}", limit=${limit}). Watch the logs!`);
   
   await closeRedis();
 }

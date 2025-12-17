@@ -58,6 +58,11 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY PROMPTS.md ./PROMPTS.md
 
+# Build Dashboard UI
+COPY dashboard-ui ./dashboard-ui
+RUN cd dashboard-ui && npm install && npm run build
+ENV PUBLIC_DIR=/app/dashboard-ui/dist
+
 # Ensure runtime directories exist (logs, rendered videos, generated audio)
 RUN mkdir -p logs out public/audio
 

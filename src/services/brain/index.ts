@@ -61,6 +61,14 @@ const JOB_LOCK_TTL_SECONDS = 10 * 60; // 10 minutes
 const MAX_STAGE_RETRIES = 3;
 const RETRY_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
+function isShopifyEnabled(): boolean {
+  const raw = String(process.env.SHOPIFY_ENABLED ?? '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .toLowerCase();
+  return raw === '' || ['1', 'true', 'yes', 'y'].includes(raw);
+}
+
 const RELEASE_LOCK_LUA = `
   if redis.call("get", KEYS[1]) == ARGV[1] then
     return redis.call("del", KEYS[1])
@@ -142,6 +150,7 @@ async function handleStageFailure(queueName: string, productId: string, error: u
 
 async function startWorker() {
   logger.info('🧠 Brain Service started (All Agents). Listening for jobs...');
+  logger.info(`🛒 Shopify enabled: ${isShopifyEnabled()} (SHOPIFY_ENABLED=${process.env.SHOPIFY_ENABLED ?? ''})`);
 
   while (true) {
     try {
@@ -350,6 +359,26 @@ async function updateProductState(
 async function handleSync(productId: string, videoPath: string | null = null): Promise<void> {
   const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product || !product.marketingCopy) return;
+
+  // Safety switch:
+  // - Default behavior is to list on Shopify.
+  // - Set SHOPIFY_ENABLED=0/false to skip Shopify calls (useful for local testing without spamming the store).
+  if (!isShopifyEnabled()) {
+    logger.warn(`[${productId}] Shopify sync skipped because SHOPIFY_ENABLED=${process.env.SHOPIFY_ENABLED}`);
+    try {
+      await prisma.agentLog.create({
+        data: {
+          agentName: 'Shopify',
+          decision: 'SKIPPED',
+          reason: `Shopify sync skipped (SHOPIFY_ENABLED=${process.env.SHOPIFY_ENABLED})`,
+          productId,
+        },
+      });
+    } catch (err) {
+      logger.warn(`[${productId}] Failed to write Shopify SKIPPED log: ${err}`);
+    }
+    return;
+  }
 
   const copy = product.marketingCopy as unknown as CopywritingResult;
 
