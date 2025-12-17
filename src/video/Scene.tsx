@@ -11,14 +11,19 @@ export interface SceneProps {
 export const Scene: React.FC<SceneProps> = ({ image, audio, caption, durationInFrames }) => {
   const { width } = useVideoConfig();
 
-  // Handle local static files vs remote URLs
-  const audioSrc = audio.startsWith('http') ? audio : staticFile(audio);
+  const stripLeadingSlash = (p: string) => p.replace(/^\//, '');
+
+  // Handle local static files vs remote URLs.
+  // NOTE: `staticFile()` expects a path relative to the `public/` folder,
+  // so we normalize leading "/" to avoid path issues.
+  const audioSrc = audio.startsWith('http') ? audio : staticFile(stripLeadingSlash(audio));
+  const imageSrc = image.startsWith('http') ? image : staticFile(stripLeadingSlash(image));
 
   return (
     <AbsoluteFill>
       <AbsoluteFill style={{ backgroundColor: 'black' }}>
         <Img
-          src={image}
+          src={imageSrc}
           style={{
             width: '100%',
             height: '100%',

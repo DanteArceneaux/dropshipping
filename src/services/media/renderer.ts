@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs/promises';
 import { bundle } from '@remotion/bundler';
 import { renderMedia, selectComposition } from '@remotion/renderer';
 import { VideoScriptResult } from '../brain/video';
@@ -21,6 +22,11 @@ const WORDS_PER_SECOND = 2; // Conservative estimate
 
 export class VideoRenderer {
   private readonly voiceoverService: VoiceoverService;
+  /**
+   * Bundling the Remotion project can be expensive (webpack).
+   * Cache the bundle location so multiple renders (or retries) don't rebundle.
+   */
+  private bundleLocationPromise: Promise<string> | null = null;
 
   constructor() {
     this.voiceoverService = new VoiceoverService();
@@ -78,14 +84,20 @@ export class VideoRenderer {
   }
 
   private async bundleProject(): Promise<string> {
+    if (this.bundleLocationPromise) {
+      return this.bundleLocationPromise;
+    }
+
     const entryPoint = path.resolve(process.cwd(), 'src/video/index.ts');
 
     logger.info('Bundling Remotion project...');
     
-    return bundle({
+    this.bundleLocationPromise = bundle({
       entryPoint,
       webpackOverride: (config: WebpackConfiguration) => config,
     });
+
+    return this.bundleLocationPromise;
   }
 
   private async renderToFile(
@@ -103,9 +115,13 @@ export class VideoRenderer {
       inputProps,
     });
 
+    // Ensure output directory exists on clean machines.
+    const outDir = path.resolve(process.cwd(), 'out');
+    await fs.mkdir(outDir, { recursive: true });
+
     const outputLocation = path.resolve(
-      process.cwd(),
-      `out/video-${Date.now()}.mp4`
+      outDir,
+      `video-${Date.now()}.mp4`
     );
 
     logger.info(`Rendering video to ${outputLocation}...`);

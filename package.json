@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "video:test": "ts-node src/scripts/test-video-render.ts",
+    "flow:test": "ts-node src/scripts/test-full-flow.ts",
+    "test": "echo \"Run `npm run typecheck`, `npm run video:test`, or `npm run flow:test`\" && exit 0",
     "scraper": "ts-node src/services/scraper/index.ts",
     "brain": "ts-node src/services/brain/index.ts"
   },

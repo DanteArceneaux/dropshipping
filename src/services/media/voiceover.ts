@@ -50,18 +50,38 @@ export class VoiceoverService {
   private initializeProvider(): void {
     if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
       try {
-        this.googleClient = new TextToSpeechClient();
-        this.provider = 'google';
-        logger.info('🎙️ Voiceover Service: Using Google Cloud TTS');
+        const creds = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        const resolvedCredsPath = path.isAbsolute(creds)
+          ? creds
+          : path.resolve(process.cwd(), creds);
+
+        // IMPORTANT:
+        // In Docker, it's common for GOOGLE_APPLICATION_CREDENTIALS to be set
+        // but the file not to be mounted. In that case, Google TTS will throw
+        // and can destabilize the worker. We verify the file exists before
+        // selecting Google as the provider.
+        if (fs.existsSync(resolvedCredsPath)) {
+          this.googleClient = new TextToSpeechClient();
+          this.provider = 'google';
+          logger.info('🎙️ Voiceover Service: Using Google Cloud TTS');
+          return;
+        }
+
+        logger.warn(
+          `GOOGLE_APPLICATION_CREDENTIALS is set but file is missing at: ${resolvedCredsPath}. Falling back to OpenAI or MOCK.`
+        );
       } catch (err) {
         logger.warn(`Failed to init Google TTS: ${err}`);
       }
-    } else if (process.env.OPENAI_API_KEY) {
+    }
+
+    if (process.env.OPENAI_API_KEY) {
       this.provider = 'openai';
       logger.info('🎙️ Voiceover Service: Using OpenAI TTS');
-    } else {
-      logger.warn('⚠️ Voiceover Service: No credentials found. Using MOCK (Silence).');
+      return;
     }
+
+    logger.warn('⚠️ Voiceover Service: No credentials found. Using MOCK (Silence).');
   }
 
   async generateAudio(text: string, voicePreference: string = 'onyx'): Promise<string> {
