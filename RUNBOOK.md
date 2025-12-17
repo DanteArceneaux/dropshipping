@@ -2,6 +2,25 @@
 
 This document outlines standard operating procedures (SOPs) for maintaining the autonomous dropshipping bot.
 
+## 0. Quickstart (Local / Dev)
+
+### Required files
+- Create `secrets.env` from `secrets.example.md` (do **not** commit it).
+- Optional (only if you want Google TTS): place `google-service-account.json` next to `secrets.env`.
+
+### Start everything (Docker)
+1. Build and start all services:
+   - `docker compose up -d --build`
+2. Watch workers:
+   - `docker compose logs -f brain scraper`
+
+### Local scripts (host machine)
+- `npm run typecheck`
+- `npm run video:test` (renders a standalone MP4 into `out/`)
+- `npm run flow:test` (creates a test product and pushes it into the pipeline via Redis)
+
+---
+
 ## 1. Infrastructure Operations
 
 ### Docker Management
@@ -16,29 +35,36 @@ This document outlines standard operating procedures (SOPs) for maintaining the 
 **Issue:** Job queue is stuck or processing duplicate jobs.
 **Action:**
 1. Access Redis CLI: `docker compose exec redis redis-cli`
-2. Check queue length: `LLEN job_queue`
-3. Flush all keys (WARNING: deletes all pending jobs): `FLUSHALL`
-4. Inspect specific job: `LINDEX job_queue 0`
+2. Check queue lengths:
+   - `LLEN queue:scrape`
+   - `LLEN queue:discovery`
+   - `LLEN queue:sourcing`
+   - `LLEN queue:copywrite`
+   - `LLEN queue:video`
+   - `LLEN queue:dlq`
+3. Inspect a job (example):
+   - `LINDEX queue:copywrite 0`
+4. DLQ payloads are JSON strings:
+   - `LRANGE queue:dlq 0 10`
+5. Flush all keys (WARNING: deletes all pending jobs): `FLUSHALL`
 
 ---
 
 ## 2. Scraper Troubleshooting
 
 ### HTTP 403 Forbidden / CAPTCHA
-**Trigger:** High request volume to TikTok/AliExpress.
+**Trigger:** YouTube rate limiting / bot detection.
 **Resolution:**
-1. **Rotate Proxies:** Ensure the proxy rotation middleware is active.
-   - Check `PROXY_LIST` env var.
-   - Verify provider (BrightData/Smartproxy) bandwidth.
-2. **Increase Delays:** Edit `scraping_config.json` to increase `min_delay` between requests.
-3. **Browser Fingerprints:** Regenerate user-agent headers in the scraper service.
+1. Reduce scrape frequency / concurrency (run fewer jobs at once).
+2. Ensure Puppeteer is running headless in production (`PUPPETEER_HEADLESS="true"`).
+3. If search starts returning 0 results intermittently, retry the job (the system will requeue on failure).
 
 ### Selector Changes
-**Trigger:** Scraper returns `null` for fields like `price` or `title`.
+**Trigger:** YouTube DOM changes cause 0 results or missing fields.
 **Resolution:**
-1. Inspect the target site manually (Inspect Element).
-2. Update the CSS/XPath selectors in `src/scrapers/definitions.ts`.
-3. Redeploy the scraper container.
+1. Inspect the YouTube search results page markup.
+2. Update selectors in `src/services/scraper/youtube.ts`.
+3. Rebuild containers: `docker compose up -d --build scraper brain`
 
 ---
 
@@ -48,13 +74,17 @@ This document outlines standard operating procedures (SOPs) for maintaining the 
 **Limit:** Leaky bucket algorithm (40 requests/bucket, refill rate 2/sec).
 **Action:**
 - The system automatically backs off (exponential backoff).
-- If persistent: Check if `SHOPIFY_SYNC_INTERVAL` is too aggressive (default: 5 mins).
+- If persistent: reduce listing frequency (fewer products per hour).
 
 ### OpenAI API (429 / Insufficient Quota)
 **Action:**
 - Check billing status on OpenAI dashboard.
-- If hitting TPM (Tokens Per Minute) limits, implement a queue throttle in `src/llm/client.ts`.
-- Switch to a fallback model (e.g., `gpt-3.5-turbo`) in `config.ts` temporarily.
+- If hitting TPM limits, reduce concurrent jobs and/or switch SMART calls to a cheaper model.
+
+### SerpApi (429 / no matches)
+**Action:**
+- Confirm the image URL is a direct image (YouTube thumbnails work well).
+- Retry: Lens results can be intermittent.
 
 ---
 
@@ -62,7 +92,19 @@ This document outlines standard operating procedures (SOPs) for maintaining the 
 
 ### Postgres Connection Issues
 **Action:**
-- Verify credentials in `.env`.
+- Verify credentials in `secrets.env` (host) and/or docker compose env vars.
 - Check if volume is corrupt: `docker volume ls`.
 - **Backup:** Run `pg_dump -U [user] [db_name] > backup.sql` before major updates.
+
+---
+
+## 5. Video Rendering Troubleshooting
+
+### Remotion downloads Chrome / slow first render
+**Cause:** Remotion downloads a headless Chromium build on first use.
+**Action:** This is expected. Subsequent renders are faster due to caching.
+
+### Audio 404 during render (Docker)
+**Cause:** Dynamic audio files must be available to the Remotion bundle server.
+**Action:** The renderer syncs generated audio into the bundle automatically; if you see this again, rebuild brain: `docker compose up -d --build brain`
 

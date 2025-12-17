@@ -21,13 +21,32 @@ services:
     volumes:
       - redis_data:/data
 
+  migrate:
+    build: .
+    container_name: dropship_migrate
+    restart: "no"
+    depends_on:
+      - postgres
+      - redis
+    env_file:
+      - secrets.env
+    environment:
+      # Override local values from secrets.env when running in Docker.
+      DATABASE_URL: postgresql://admin:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-dropship_bot}?schema=public
+      REDIS_URL: redis://redis:6379
+    command: npx prisma migrate deploy
+
   scraper:
     build: .
     container_name: dropship_scraper
     restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
     env_file:
       - secrets.env
     environment:
@@ -43,8 +62,12 @@ services:
     container_name: dropship_brain
     restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
     env_file:
       - secrets.env
     environment:
