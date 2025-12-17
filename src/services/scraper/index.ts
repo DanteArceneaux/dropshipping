@@ -1,3 +1,6 @@
+import * as dotenv from 'dotenv';
+dotenv.config({ path: 'secrets.env' });
+
 import { redis, closeRedis } from '../../shared/redis';
 import { prisma } from '../../shared/db';
 import { QUEUES, ScrapeJobPayload } from '../../shared/types';
