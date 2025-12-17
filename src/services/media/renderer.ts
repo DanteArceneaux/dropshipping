@@ -41,6 +41,12 @@ export class VideoRenderer {
     // Step 2: Bundle Remotion project
     const bundleLocation = await this.bundleProject();
 
+    // IMPORTANT:
+    // We generate audio files dynamically (public/audio/...) for each render.
+    // If we cache the bundle, the bundle's copied `public/` folder can become stale.
+    // We sync dynamic assets into the bundle before rendering so assets resolve.
+    await this.syncDynamicPublicAssets(bundleLocation, scenesData);
+
     // Step 3: Render final video
     const outputLocation = await this.renderToFile(bundleLocation, scenesData);
 
@@ -135,6 +141,31 @@ export class VideoRenderer {
     });
 
     return outputLocation;
+  }
+
+  private async syncDynamicPublicAssets(
+    bundleLocation: string,
+    scenesData: SceneData[]
+  ): Promise<void> {
+    // The bundle output contains a `public/` directory which Remotion serves as `/public/*`.
+    // We copy the dynamically generated audio into that directory so `staticFile()` can find it.
+    const bundlePublicDir = path.join(bundleLocation, 'public');
+
+    for (const scene of scenesData) {
+      // Sync local audio assets only.
+      if (scene.audio.startsWith('http')) continue;
+
+      const rel = scene.audio.replace(/^\//, ''); // "/audio/x.mp3" -> "audio/x.mp3"
+      const src = path.resolve(process.cwd(), 'public', rel);
+      const dest = path.join(bundlePublicDir, rel);
+
+      try {
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.copyFile(src, dest);
+      } catch (err) {
+        logger.warn(`Failed to sync audio asset into bundle: ${rel} (${err})`);
+      }
+    }
   }
 }
 
