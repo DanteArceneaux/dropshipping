@@ -1,5 +1,6 @@
-import puppeteer, { Browser, Page } from 'puppeteer-extra';
+import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import type { Browser, Page } from 'puppeteer';
 import { logger } from '../../shared/logger';
 import { ProductCandidate } from '../../shared/types';
 

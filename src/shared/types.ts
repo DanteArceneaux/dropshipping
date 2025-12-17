@@ -1,5 +1,7 @@
 export interface ScrapeJobPayload {
-  source: 'tiktok' | 'instagram';
+  // Backwards-compatible: we still accept "tiktok"/"instagram" jobs, but the
+  // current implementation primarily scrapes YouTube Shorts via search.
+  source: 'tiktok' | 'instagram' | 'youtube';
   url?: string;
   hashtag?: string;
   limit?: number;
@@ -7,7 +9,9 @@ export interface ScrapeJobPayload {
 
 export interface ProductCandidate {
   externalUrl: string;
-  platform: 'tiktok' | 'instagram';
+  // Where the candidate was discovered from. We currently ingest YouTube search
+  // results and use thumbnails for sourcing.
+  platform: 'tiktok' | 'instagram' | 'youtube';
   rawStats: {
     views: number;
     likes: number;

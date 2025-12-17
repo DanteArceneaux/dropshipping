@@ -66,7 +66,11 @@ export class VoiceoverService {
 
   async generateAudio(text: string, voicePreference: string = 'onyx'): Promise<string> {
     const safeText = this.sanitizeFilename(text);
-    const ext = 'mp3'; // Both Google and OpenAI support MP3
+    // IMPORTANT:
+    // - Google/OpenAI produce MP3.
+    // - Our mock fallback generates a *WAV* buffer (silence), so we must use
+    //   `.wav` when provider === 'mock' to avoid writing WAV bytes into an `.mp3`.
+    const ext = this.provider === 'mock' ? 'wav' : 'mp3';
     const filename = `${Date.now()}_${safeText}.${ext}`;
     const filePath = path.join(this.outputDir, filename);
     const relativePath = `/audio/${filename}`;
