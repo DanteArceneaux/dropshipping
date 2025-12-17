@@ -1,6 +1,7 @@
 import { generateText } from '../../shared/llm';
 import { loadPrompt } from '../../shared/prompts';
 import { logger } from '../../shared/logger';
+import { safeJsonParse } from '../../shared/safe-json';
 import { SupplierSearchService } from './supplier-search';
 
 // ============================================================================
@@ -83,7 +84,18 @@ export class SourcingAgent {
     `;
 
     const content = await generateText(systemPrompt, userContent, 'SMART', true);
-    return JSON.parse(content) as LLMSourcingDecision;
+
+    try {
+      return safeJsonParse<LLMSourcingDecision>(content, { context: 'SourcingAgent' });
+    } catch (parseErr) {
+      const retryContent = await generateText(
+        systemPrompt,
+        `${userContent}\n\nReturn ONLY a single JSON object. No markdown. No code fences. No extra commentary.`,
+        'SMART',
+        true
+      );
+      return safeJsonParse<LLMSourcingDecision>(retryContent, { context: 'SourcingAgent:retry' });
+    }
   }
 
   private processDecision(decision: LLMSourcingDecision): SourcingResult {
