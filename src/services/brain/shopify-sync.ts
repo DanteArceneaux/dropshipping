@@ -17,6 +17,25 @@ interface CreateProductInput {
   videoPath?: string;
 }
 
+interface SyncProductInput extends CreateProductInput {
+  /**
+   * If provided, we will update the existing Shopify product instead of creating
+   * a new one. This is the key to idempotency.
+   */
+  existingProductId?: string | null;
+
+  /**
+   * Shopify GraphQL GID for the product (gid://shopify/Product/123).
+   * If omitted, we will derive it from `existingProductId` when possible.
+   */
+  existingProductGid?: string | null;
+
+  /**
+   * If present, we assume video has already been attached and will skip re-uploading.
+   */
+  existingVideoMediaId?: string | null;
+}
+
 interface ShopifyProductData {
   title: string;
   body_html: string;
@@ -34,6 +53,13 @@ interface ShopifyProductResponse {
   product: {
     id: number;
     admin_graphql_api_id: string;
+  };
+}
+
+interface ShopifyProductGetResponse {
+  product: {
+    id: number;
+    variants?: Array<{ id: number }>;
   };
 }
 
@@ -60,6 +86,13 @@ interface ProductCreateMediaResponse {
   };
 }
 
+interface SyncProductResult {
+  productId: string;
+  productGid: string;
+  adminUrl: string;
+  videoMediaId: string | null;
+}
+
 type GraphqlClient = InstanceType<typeof shopify.clients.Graphql>;
 
 // ============================================================================
@@ -67,7 +100,21 @@ type GraphqlClient = InstanceType<typeof shopify.clients.Graphql>;
 // ============================================================================
 
 export class ShopifySyncService {
+  /**
+   * Backwards-compatible helper. Prefer `syncProduct()` for idempotency.
+   */
   async createProduct(data: CreateProductInput): Promise<string> {
+    const result = await this.syncProduct(data);
+    return result.productId;
+  }
+
+  /**
+   * Create-or-update Shopify sync entrypoint.
+   * - If `existingProductId` is present, we update that product (no duplicates).
+   * - Otherwise, we create a new product.
+   * Returns IDs and an admin URL that can be stored on the Product record.
+   */
+  async syncProduct(data: SyncProductInput): Promise<SyncProductResult> {
     logger.info(`Syncing product to Shopify: ${data.title}`);
 
     if (!session.accessToken) {
@@ -77,16 +124,65 @@ export class ShopifySyncService {
     const client = new shopify.clients.Rest({ session });
     const gqlClient = new shopify.clients.Graphql({ session });
 
-    let videoUrl: string | null = null;
-    if (data.videoPath) {
-      try {
-        videoUrl = await this.uploadVideo(gqlClient, data.videoPath);
-      } catch (err) {
-        logger.error(`Video upload failed, proceeding without video: ${err}`);
-      }
-    }
+    const isUpdate = Boolean(data.existingProductId);
 
-    try {
+    let productId: string;
+    let productGid: string;
+
+    // ------------------------------------------------------------------------
+    // 1) Create or Update base product (title/description/vendor)
+    // ------------------------------------------------------------------------
+
+    if (isUpdate) {
+      const existingId = data.existingProductId as string;
+
+      // Update product basic fields. (We intentionally do NOT overwrite images here
+      // to avoid accidental deletions. Images can be a separate step later.)
+      await client.put({
+        path: `products/${existingId}`,
+        data: {
+          product: {
+            id: Number(existingId),
+            title: data.title,
+            body_html: data.descriptionHtml,
+            vendor: data.vendor,
+            product_type: 'Dropship',
+          }
+        },
+        type: DataType.JSON,
+      });
+
+      // Update the first variant price if possible.
+      try {
+        const existing = await client.get({
+          path: `products/${existingId}`,
+          type: DataType.JSON,
+        });
+        const existingBody = existing.body as ShopifyProductGetResponse;
+        const variantId = existingBody.product.variants?.[0]?.id;
+
+        if (variantId) {
+          await client.put({
+            path: `variants/${variantId}`,
+            data: {
+              variant: {
+                id: variantId,
+                price: data.price,
+              }
+            },
+            type: DataType.JSON,
+          });
+        }
+      } catch (variantErr) {
+        logger.warn(`Failed to update variant price for product ${existingId}: ${variantErr}`);
+      }
+
+      productId = existingId;
+      productGid = data.existingProductGid || `gid://shopify/Product/${existingId}`;
+
+      logger.info(`Successfully updated Shopify product (Base): ${productId}`);
+
+    } else {
       const productData: ShopifyProductData = {
         title: data.title,
         body_html: data.descriptionHtml,
@@ -109,21 +205,40 @@ export class ShopifySyncService {
       });
 
       const body = response.body as ShopifyProductResponse;
-      const productId = body.product.id;
-      const adminGqlId = body.product.admin_graphql_api_id;
-      
-      logger.info(`Successfully created Shopify product (Base): ${productId}`);
+      productId = body.product.id.toString();
+      productGid = body.product.admin_graphql_api_id;
 
-      if (videoUrl) {
-        await this.attachVideoToProduct(gqlClient, adminGqlId, videoUrl);
+      logger.info(`Successfully created Shopify product (Base): ${productId}`);
+    }
+
+    const adminUrl = this.buildAdminUrl(productId);
+
+    // ------------------------------------------------------------------------
+    // 2) Attach video (only if we have not already attached one)
+    // ------------------------------------------------------------------------
+
+    let videoMediaId: string | null = data.existingVideoMediaId || null;
+
+    if (data.videoPath && !videoMediaId) {
+      let videoUrl: string | null = null;
+      try {
+        videoUrl = await this.uploadVideo(gqlClient, data.videoPath);
+      } catch (err) {
+        logger.error(`Video upload failed, proceeding without video: ${err}`);
       }
 
-      return productId.toString();
-
-    } catch (error) {
-      logger.error(`Shopify sync failed: ${error}`);
-      throw error;
+      if (videoUrl) {
+        const attached = await this.attachVideoToProduct(gqlClient, productGid, videoUrl);
+        videoMediaId = attached;
+      }
     }
+
+    return {
+      productId,
+      productGid,
+      adminUrl,
+      videoMediaId,
+    };
   }
 
   private async uploadVideo(client: GraphqlClient, videoPath: string): Promise<string> {
@@ -213,7 +328,7 @@ export class ShopifySyncService {
     client: GraphqlClient,
     productId: string,
     videoUrl: string
-  ): Promise<void> {
+  ): Promise<string | null> {
     logger.info(`Attaching video from staging to product ${productId}`);
 
     const mutation = `
@@ -245,9 +360,19 @@ export class ShopifySyncService {
     
     if (mediaUserErrors.length > 0) {
       logger.warn(`Failed to attach video: ${JSON.stringify(mediaUserErrors)}`);
+      return null;
     } else {
       logger.info('Video attached successfully!');
+      return result.data.productCreateMedia.media?.[0]?.id ?? null;
     }
+  }
+
+  private buildAdminUrl(productId: string): string {
+    // `session.shop` is stored without protocol in our shared shopify session.
+    // Example: "my-store.myshopify.com"
+    const shopDomain = session.shop || process.env.SHOPIFY_SHOP_DOMAIN || '';
+    const clean = shopDomain.replace(/^https?:\/\//, '');
+    return `https://${clean}/admin/products/${productId}`;
   }
 
   // Helper to convert Markdown to simple HTML (simplified for MVP)

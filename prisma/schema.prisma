@@ -34,6 +34,13 @@ model Product {
   // Sourcing
   supplierUrl String?
   costPrice   Decimal?      @db.Decimal(10, 2)
+
+  // Shopify sync (idempotency + admin link)
+  shopifyProductId     String?   @unique
+  shopifyProductGid    String?
+  shopifyAdminUrl      String?
+  shopifyVideoMediaId  String?
+  listedAt             DateTime?
   
   status      ProductStatus @default(DETECTED)
   

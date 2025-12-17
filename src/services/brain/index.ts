@@ -26,6 +26,13 @@ interface ProductUpdateData {
   costPrice?: number | Prisma.Decimal;
   marketingCopy?: Prisma.InputJsonValue;
   videoScript?: Prisma.InputJsonValue;
+
+  // Shopify sync (idempotency + admin links)
+  shopifyProductId?: string | null;
+  shopifyProductGid?: string | null;
+  shopifyAdminUrl?: string | null;
+  shopifyVideoMediaId?: string | null;
+  listedAt?: Date | null;
 }
 
 interface AgentLogData {
@@ -255,21 +262,34 @@ async function handleSync(productId: string, videoPath: string | null = null): P
     const basePrice = Number(product.costPrice || 0);
     const sellingPrice = (basePrice * priceMultiplier).toFixed(2);
 
-    const shopifyId = await shopifySync.createProduct({
+    const syncResult = await shopifySync.syncProduct({
       title: copy.title,
       descriptionHtml: shopifySync.convertMarkdownToHtml(copy.description_md),
       price: sellingPrice,
       vendor: 'AutoDropship',
       images: product.images.length > 0 ? product.images : [product.externalUrl],
-      videoPath: videoPath ?? undefined
+      videoPath: videoPath ?? undefined,
+
+      // Idempotency: if we already listed this Product before, update it instead of creating duplicates.
+      existingProductId: product.shopifyProductId ?? null,
+      existingProductGid: product.shopifyProductGid ?? null,
+      existingVideoMediaId: product.shopifyVideoMediaId ?? null,
     });
 
     await prisma.product.update({
       where: { id: productId },
-      data: { status: 'LISTED' as ProductStatus }
+      data: {
+        status: 'LISTED' as ProductStatus,
+        shopifyProductId: syncResult.productId,
+        shopifyProductGid: syncResult.productGid,
+        shopifyAdminUrl: syncResult.adminUrl,
+        shopifyVideoMediaId: syncResult.videoMediaId,
+        listedAt: new Date(),
+      }
     });
 
-    logger.info(`🛍️ LISTED ON SHOPIFY! ID: ${shopifyId}`);
+    logger.info(`🛍️ LISTED ON SHOPIFY! ID: ${syncResult.productId}`);
+    logger.info(`🛠️ Shopify Admin: ${syncResult.adminUrl}`);
   } catch (err) {
     logger.error(`Failed to list product: ${err}`);
   }
