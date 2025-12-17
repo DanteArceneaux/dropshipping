@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { VideoScriptAgent } from '../services/brain/video';
-import { openai } from '../shared/llm';
+import * as llm from '../shared/llm';
 import { loadPrompt } from '../shared/prompts';
 
-vi.mock('../shared/llm');
+vi.mock('../shared/llm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/llm')>();
+  return {
+    ...actual,
+    generateText: vi.fn(),
+  };
+});
 vi.mock('../shared/prompts');
 
 describe('Video Script Agent', () => {
@@ -21,9 +27,7 @@ describe('Video Script Agent', () => {
       ]
     };
 
-    vi.mocked(openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify(mockOutput) } }]
-    } as any);
+    vi.mocked(llm.generateText).mockResolvedValue(JSON.stringify(mockOutput));
 
     const result = await agent.generateScript({
       title: 'Product',
@@ -39,7 +43,7 @@ describe('Video Script Agent', () => {
   });
 
   it('should fail cleanly on API errors', async () => {
-    vi.mocked(openai.chat.completions.create).mockRejectedValue(new Error('API Down'));
+    vi.mocked(llm.generateText).mockRejectedValue(new Error('API Down'));
 
     // Provide minimal valid input to pass initial checks before the API call
     const input = {
@@ -50,4 +54,3 @@ describe('Video Script Agent', () => {
     await expect(agent.generateScript(input as any)).rejects.toThrow('API Down');
   });
 });
-

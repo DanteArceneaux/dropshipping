@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SourcingAgent } from '../services/brain/sourcing';
 import { MockSupplierSearch } from '../services/brain/supplier-search';
-import { openai } from '../shared/llm';
+import * as llm from '../shared/llm';
 import { loadPrompt } from '../shared/prompts';
 
-vi.mock('../shared/llm');
+vi.mock('../shared/llm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/llm')>();
+  return {
+    ...actual,
+    generateText: vi.fn(),
+  };
+});
 vi.mock('../shared/prompts');
 
 describe('Sourcing Agent', () => {
@@ -26,9 +32,7 @@ describe('Sourcing Agent', () => {
       is_verified: true
     };
 
-    vi.mocked(openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify(mockDecision) } }]
-    } as any);
+    vi.mocked(llm.generateText).mockResolvedValue(JSON.stringify(mockDecision));
 
     const result = await agent.source({ title: 'Test Product' });
 
@@ -44,9 +48,7 @@ describe('Sourcing Agent', () => {
       reasoning: 'All suppliers too slow'
     };
 
-    vi.mocked(openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify(mockDecision) } }]
-    } as any);
+    vi.mocked(llm.generateText).mockResolvedValue(JSON.stringify(mockDecision));
 
     const result = await agent.source({ title: 'Hard to find product' });
 
@@ -54,4 +56,3 @@ describe('Sourcing Agent', () => {
     expect(result.supplierUrl).toBeNull();
   });
 });
-

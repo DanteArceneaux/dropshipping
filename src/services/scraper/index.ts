@@ -29,12 +29,14 @@ async function startWorker() {
           where: { externalUrl: candidate.externalUrl },
           update: {
             viralScore: Math.floor(candidate.rawStats.views / 1000), // Simple scoring for MVP
+            images: candidate.metadata.thumbnailUrl ? [candidate.metadata.thumbnailUrl] : [],
           },
           create: {
             externalUrl: candidate.externalUrl,
             title: candidate.metadata.title,
             viralScore: Math.floor(candidate.rawStats.views / 1000),
-            status: 'DETECTED'
+            status: 'DETECTED',
+            images: candidate.metadata.thumbnailUrl ? [candidate.metadata.thumbnailUrl] : [],
           }
         });
 

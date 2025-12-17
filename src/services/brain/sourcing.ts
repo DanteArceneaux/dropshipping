@@ -1,7 +1,8 @@
-import { openai, MODELS } from '../../shared/llm';
+import { generateText, MODELS } from '../../shared/llm';
 import { loadPrompt } from '../../shared/prompts';
 import { logger } from '../../shared/logger';
 import { SupplierSearchService, SupplierResult } from './supplier-search';
+import { SerpApiSupplierSearch } from './serpapi-sourcing';
 
 export interface SourcingResult {
   supplierUrl: string | null;
@@ -11,7 +12,7 @@ export interface SourcingResult {
 }
 
 export class SourcingAgent {
-  constructor(private searchService: SupplierSearchService) {}
+  constructor(private searchService: SupplierSearchService = new SerpApiSupplierSearch()) {}
 
   async source(product: { title: string; imageUrl?: string }): Promise<SourcingResult> {
     logger.info(`Sourcing suppliers for: ${product.title}`);
@@ -46,18 +47,7 @@ export class SourcingAgent {
     `;
 
     try {
-      const response = await openai.chat.completions.create({
-        model: MODELS.SMART, // Sourcing needs high reasoning (GPT-4)
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.2, // Low temp for strict logic
-      });
-
-      const content = response.choices[0].message.content;
-      if (!content) throw new Error('Empty response from LLM');
+      const content = await generateText(systemPrompt, userContent, 'SMART', true);
 
       const decision = JSON.parse(content);
 

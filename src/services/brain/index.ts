@@ -1,3 +1,6 @@
+import * as dotenv from 'dotenv';
+dotenv.config({ path: 'secrets.env' });
+
 import { redis, closeRedis } from '../../shared/redis';
 import { prisma } from '../../shared/db';
 import { QUEUES } from '../../shared/types';
@@ -5,6 +8,7 @@ import { DiscoveryAgent } from './discovery';
 import { SourcingAgent } from './sourcing';
 import { CopywriterAgent } from './copywriter';
 import { VideoScriptAgent } from './video';
+import { VideoRenderer } from '../media/renderer';
 import { ShopifySyncService } from './shopify-sync';
 import { MockSupplierSearch } from './supplier-search';
 import { logger } from '../../shared/logger';
@@ -13,6 +17,7 @@ const discoveryAgent = new DiscoveryAgent();
 const sourcingAgent = new SourcingAgent(new MockSupplierSearch());
 const copywriterAgent = new CopywriterAgent();
 const videoAgent = new VideoScriptAgent();
+const videoRenderer = new VideoRenderer();
 const shopifySync = new ShopifySyncService();
 
 async function startWorker() {
@@ -20,7 +25,6 @@ async function startWorker() {
 
   while (true) {
     try {
-      // Prioritize: Video > Copywrite > Sourcing > Discovery
       const result = await redis.blpop(
         QUEUES.VIDEO, 
         QUEUES.COPYWRITE, 
@@ -31,21 +35,31 @@ async function startWorker() {
       
       if (result) {
         const [queueName, productId] = result;
-        
-        if (queueName === QUEUES.DISCOVERY) {
-          await handleDiscovery(productId);
-        } else if (queueName === QUEUES.SOURCING) {
-          await handleSourcing(productId);
-        } else if (queueName === QUEUES.COPYWRITE) {
-          await handleCopywrite(productId);
-        } else if (queueName === QUEUES.VIDEO) {
-          await handleVideo(productId);
-        }
+        await processJob(queueName, productId);
       }
     } catch (error) {
       logger.error(`Error in brain worker: ${error}`);
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
+  }
+}
+
+async function processJob(queueName: string, productId: string) {
+  switch (queueName) {
+    case QUEUES.DISCOVERY:
+      await handleDiscovery(productId);
+      break;
+    case QUEUES.SOURCING:
+      await handleSourcing(productId);
+      break;
+    case QUEUES.COPYWRITE:
+      await handleCopywrite(productId);
+      break;
+    case QUEUES.VIDEO:
+      await handleVideo(productId);
+      break;
+    default:
+      logger.warn(`Unknown queue: ${queueName}`);
   }
 }
 
@@ -63,22 +77,14 @@ async function handleDiscovery(productId: string) {
 
   const status = verdict.verdict === 'APPROVE' ? 'VETTED' : 'REJECTED';
   
-  await prisma.product.update({
-    where: { id: productId },
-    data: {
-      status,
-      viralScore: verdict.viral_score,
-      sentiment: verdict.sentiment_score,
-    }
-  });
-
-  await prisma.agentLog.create({
-    data: {
-      agentName: 'Discovery',
-      decision: verdict.verdict,
-      reason: verdict.reasoning,
-      productId: product.id
-    }
+  await updateProductState(productId, {
+    status,
+    viralScore: verdict.viral_score,
+    sentiment: verdict.sentiment_score,
+  }, {
+    agentName: 'Discovery',
+    decision: verdict.verdict,
+    reason: verdict.reasoning
   });
 
   if (status === 'VETTED') {
@@ -99,22 +105,14 @@ async function handleSourcing(productId: string) {
 
   const status = result.verdict === 'APPROVED' ? 'APPROVED' : 'REJECTED';
 
-  await prisma.product.update({
-    where: { id: productId },
-    data: {
-      status,
-      supplierUrl: result.supplierUrl,
-      costPrice: result.costPrice ? result.costPrice : undefined,
-    }
-  });
-
-  await prisma.agentLog.create({
-    data: {
-      agentName: 'Sourcing',
-      decision: result.verdict,
-      reason: result.reasoning,
-      productId: product.id
-    }
+  await updateProductState(productId, {
+    status,
+    supplierUrl: result.supplierUrl,
+    costPrice: result.costPrice ? result.costPrice : undefined,
+  }, {
+    agentName: 'Sourcing',
+    decision: result.verdict,
+    reason: result.reasoning
   });
 
   logger.info(`✅ Sourcing Complete for ${productId}: ${result.verdict}`);
@@ -135,21 +133,13 @@ async function handleCopywrite(productId: string) {
     description: product.description || ''
   });
 
-  await prisma.product.update({
-    where: { id: productId },
-    data: {
-      status: 'READY_FOR_VIDEO',
-      marketingCopy: copy as any
-    }
-  });
-
-  await prisma.agentLog.create({
-    data: {
-      agentName: 'Copywriter',
-      decision: 'COMPLETED',
-      reason: 'Generated marketing copy',
-      productId: product.id
-    }
+  await updateProductState(productId, {
+    status: 'READY_FOR_VIDEO',
+    marketingCopy: copy as any
+  }, {
+    agentName: 'Copywriter',
+    decision: 'COMPLETED',
+    reason: 'Generated marketing copy'
   });
 
   logger.info(`✨ Copywriting Complete for ${productId}. Pushing to Video queue.`);
@@ -175,28 +165,54 @@ async function handleVideo(productId: string) {
     }
   });
 
+  // Render the video
+  let videoPath = null;
+  try {
+    // Use the scraped image if available, otherwise fallback (which might fail if not an image)
+    const images = product.images && product.images.length > 0 
+      ? product.images 
+      : [product.externalUrl]; // Dangerous fallback if externalUrl is not an image
+
+    videoPath = await videoRenderer.renderVideo(script, images);
+  } catch (renderError) {
+    logger.error(`Failed to render video for ${productId}: ${renderError}`);
+    // We continue to sync even if video fails, or maybe we should fail? 
+    // For now, log and proceed (product will list without video).
+  }
+
+  await updateProductState(productId, {
+    status: 'READY_TO_LIST',
+    videoScript: script as any
+  }, {
+    agentName: 'VideoScript',
+    decision: 'COMPLETED',
+    reason: 'Generated video script' + (videoPath ? ' and rendered video' : '')
+  });
+
+  logger.info(`🎞️ Video Script Ready for ${productId}! Syncing to Shopify...`);
+  await handleSync(productId, videoPath);
+}
+
+// Helper to centralize DB updates
+async function updateProductState(
+  productId: string, 
+  productData: any, 
+  logData: { agentName: string; decision: string; reason: string }
+) {
   await prisma.product.update({
     where: { id: productId },
-    data: {
-      status: 'READY_TO_LIST',
-      videoScript: script as any
-    }
+    data: productData
   });
 
   await prisma.agentLog.create({
     data: {
-      agentName: 'VideoScript',
-      decision: 'COMPLETED',
-      reason: 'Generated video script',
-      productId: product.id
+      ...logData,
+      productId
     }
   });
-
-  logger.info(`🎞️ Video Script Ready for ${productId}! Syncing to Shopify...`);
-  await handleSync(productId);
 }
 
-async function handleSync(productId: string) {
+async function handleSync(productId: string, videoPath: string | null = null) {
   const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product || !product.marketingCopy) return;
 
@@ -208,7 +224,8 @@ async function handleSync(productId: string) {
       descriptionHtml: shopifySync.convertMarkdownToHtml(copy.description_md),
       price: (Number(product.costPrice || 0) * 2.5).toFixed(2),
       vendor: 'AutoDropship',
-      images: [product.externalUrl] 
+      images: product.images && product.images.length > 0 ? product.images : [product.externalUrl],
+      videoPath: videoPath || undefined
     });
 
     await prisma.product.update({

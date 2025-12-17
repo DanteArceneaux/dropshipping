@@ -1,49 +1,21 @@
-# Environment Variables Template
-# Copy this file to .env and fill in your actual values.
-# DO NOT COMMIT THE ACTUAL .env FILE TO VERSION CONTROL.
+# Environment Secrets Template
+Copy this file to `.env` and fill in the values.
 
-# -----------------------------------------------------------------------------
-# CORE SERVICES (LLM & AI)
-# -----------------------------------------------------------------------------
+## Core
+DATABASE_URL="postgresql://user:password@localhost:5432/dropshipping_db"
+REDIS_URL="redis://localhost:6379"
+LOG_LEVEL="info"
+
+## AI / LLM
 OPENAI_API_KEY="sk-..."
-ANTHROPIC_API_KEY="sk-ant-..."
 
-# -----------------------------------------------------------------------------
-# INFRASTRUCTURE (Database & Queues)
-# -----------------------------------------------------------------------------
-# Postgres
-POSTGRES_USER="admin"
-POSTGRES_PASSWORD="change_me_secure_password"
-POSTGRES_DB="dropship_bot"
-POSTGRES_HOST="postgres"
-POSTGRES_PORT="5432"
+## Sourcing
+SERPAPI_KEY="your_serpapi_key_here"
 
-# Redis
-REDIS_URL="redis://redis:6379"
+## Scraper
+# Set to 'false' to see the browser while scraping (useful for debugging)
+PUPPETEER_HEADLESS="true"
 
-# -----------------------------------------------------------------------------
-# E-COMMERCE PLATFORMS
-# -----------------------------------------------------------------------------
-# Shopify Admin API
+## Shopify
+SHOPIFY_SHOP_DOMAIN="your-shop.myshopify.com"
 SHOPIFY_ACCESS_TOKEN="shpat_..."
-SHOPIFY_SHOP_URL="https://your-store.myshopify.com"
-SHOPIFY_API_VERSION="2024-01"
-
-# -----------------------------------------------------------------------------
-# SCRAPING & DATA SOURCES
-# -----------------------------------------------------------------------------
-# Apify (TikTok/Instagram Scrapers)
-APIFY_TOKEN="apify_api_..."
-
-# Proxy Provider (Optional but recommended)
-PROXY_URL="http://user:pass@host:port"
-
-# -----------------------------------------------------------------------------
-# MEDIA GENERATION
-# -----------------------------------------------------------------------------
-# Voice Synthesis
-ELEVENLABS_API_KEY="eleven_..."
-
-# Video Editing API
-CREATOMATE_API_KEY="create_..."
-

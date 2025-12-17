@@ -19,6 +19,7 @@ export interface ProductCandidate {
     description: string;
     postedAt: Date;
     author: string;
+    thumbnailUrl?: string;
   };
 }
 

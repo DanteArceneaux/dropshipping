@@ -25,6 +25,7 @@ model Product {
   externalUrl String        @unique
   title       String?
   description String?
+  images      String[]      @default([])
   
   // Scoring
   viralScore  Int           @default(0)

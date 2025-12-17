@@ -14,9 +14,10 @@ export async function loadPrompt(agentName: 'Discovery' | 'Sourcing' | 'Copywrit
     const promptsPath = path.resolve(process.cwd(), 'PROMPTS.md');
     const content = await fs.readFile(promptsPath, 'utf-8');
 
-    // Simple parser to extract code blocks under headings
-    // Looks for "## [Number]. [Agent Name]" and extracts the code block below it
-    const regex = new RegExp(`## \\d+\\. ${agentName}.*?\\n\\*\\*Role:.*?[\\s\\S]*?\`\`\`text\\n([\\s\\S]*?)\\n\`\`\``, 'i');
+    // Simplified parser to extract code blocks under headings
+    // Looks for "## [Number]. [Agent Name]" and extracts the first ```text block below it
+    // We remove the strict dependency on "**Role:**" or specific intermediate formatting
+    const regex = new RegExp(`## \\d+\\.\\s*${agentName}[^\\n]*[\\s\\S]*?\`\`\`text\\s*([\\s\\S]*?)\\s*\`\`\``, 'i');
     const match = content.match(regex);
 
     if (match && match[1]) {

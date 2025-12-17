@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CopywriterAgent } from '../services/brain/copywriter';
-import { openai } from '../shared/llm';
+import * as llm from '../shared/llm';
 import { loadPrompt } from '../shared/prompts';
 
-vi.mock('../shared/llm');
+vi.mock('../shared/llm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/llm')>();
+  return {
+    ...actual,
+    generateText: vi.fn(),
+  };
+});
 vi.mock('../shared/prompts');
 
 describe('Copywriter Agent', () => {
@@ -21,9 +27,7 @@ describe('Copywriter Agent', () => {
       ad_hooks: ['Hook 1', 'Hook 2', 'Hook 3']
     };
 
-    vi.mocked(openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify(mockOutput) } }]
-    } as any);
+    vi.mocked(llm.generateText).mockResolvedValue(JSON.stringify(mockOutput));
 
     const result = await agent.generateCopy({
       title: 'Raw Title',
@@ -36,10 +40,9 @@ describe('Copywriter Agent', () => {
   });
 
   it('should handle API errors gracefully', async () => {
-    vi.mocked(openai.chat.completions.create).mockRejectedValue(new Error('API Error'));
+    vi.mocked(llm.generateText).mockRejectedValue(new Error('API Error'));
 
     await expect(agent.generateCopy({ title: 'T', description: 'D' }))
       .rejects.toThrow('API Error');
   });
 });
-

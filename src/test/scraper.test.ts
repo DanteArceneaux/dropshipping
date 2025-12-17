@@ -9,27 +9,31 @@ describe('Scraper Service', () => {
     scraper = new ScraperEngine();
   });
 
-  it('should scrape data from a valid TikTok URL (Mock)', async () => {
+  it('should scrape data from a valid TikTok hashtag', async () => {
     const job: ScrapeJobPayload = {
       source: 'tiktok',
-      url: 'https://www.tiktok.com/@user/video/1234567890'
-    };
-
-    // Mock the internal fetcher
-    const mockData = {
-      title: 'Viral Gadget',
-      stats: { views: 1000000, likes: 50000 }
+      hashtag: 'amazonfinds',
+      limit: 1
     };
     
-    // We spy on the method we will implement
-    vi.spyOn(scraper, 'fetchTikTokData').mockResolvedValue(mockData);
+    // We mock the internal scraper call
+    // Note: We need to cast because 'tiktokScraper' is private, but for testing we bypass or we mocking the public method if we could inject it
+    // Better way: Spy on the prototype of TikTokScraper
+    const { TikTokScraper } = await import('../services/scraper/tiktok');
+    vi.spyOn(TikTokScraper.prototype, 'scrapeHashtag').mockResolvedValue([
+        {
+            externalUrl: 'https://tiktok.com/video/123',
+            platform: 'tiktok',
+            rawStats: { views: 1000, likes: 50, shares: 0, comments: 0 },
+            metadata: { title: 'Mock Video', description: '', postedAt: new Date(), author: 'user' }
+        }
+    ]);
 
     const result = await scraper.processJob(job);
-
+    
     expect(result).toBeDefined();
-    expect(result.metadata.title).toBe('Viral Gadget');
-    expect(result.rawStats.views).toBe(1000000);
     expect(result.platform).toBe('tiktok');
+    expect(result.externalUrl).toBe('https://tiktok.com/video/123');
   });
 
   it('should throw error for unsupported platform', async () => {

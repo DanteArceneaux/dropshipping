@@ -1,9 +1,10 @@
 node_modules
 dist
 .env
+secrets.env
 .DS_Store
 coverage
 *.log
-
-
+out/
+temp/
 /src/generated/prisma

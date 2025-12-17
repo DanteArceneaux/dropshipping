@@ -1,3 +1,6 @@
+import * as dotenv from 'dotenv';
+dotenv.config({ path: 'secrets.env' });
+
 import { redis, closeRedis } from '../shared/redis';
 import { prisma } from '../shared/db';
 import { QUEUES } from '../shared/types';
@@ -13,7 +16,8 @@ async function main() {
       status: 'APPROVED',
       viralScore: 90,
       supplierUrl: 'http://ali.com/mug',
-      costPrice: 8.50
+      costPrice: 8.50,
+      images: ['https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?auto=format&fit=crop&w=800&q=80'] // Valid mug image
     }
   });
 

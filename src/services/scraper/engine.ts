@@ -1,50 +1,44 @@
 import { ScrapeJobPayload, ProductCandidate } from '../../shared/types';
 import { logger } from '../../shared/logger';
+import { TikTokScraper } from './tiktok';
 
 export class ScraperEngine {
+  private tiktokScraper: TikTokScraper;
+
+  constructor() {
+    this.tiktokScraper = new TikTokScraper();
+  }
+
+  async init() {
+    await this.tiktokScraper.init();
+  }
+
+  async close() {
+    await this.tiktokScraper.close();
+  }
   
   async processJob(job: ScrapeJobPayload): Promise<ProductCandidate> {
     if (job.source !== 'tiktok' && job.source !== 'instagram') {
       throw new Error(`Unsupported platform: ${job.source}`);
     }
 
-    if (job.source === 'tiktok' && job.url) {
-      const data = await this.fetchTikTokData(job.url);
-      
-      return {
-        externalUrl: job.url,
-        platform: 'tiktok',
-        rawStats: {
-          views: data.stats.views,
-          likes: data.stats.likes,
-          shares: 0, // Mock default
-          comments: 0 // Mock default
-        },
-        metadata: {
-          title: data.title,
-          description: 'Mock Description',
-          postedAt: new Date(),
-          author: 'mock_user'
+    if (job.source === 'tiktok') {
+        if (job.hashtag) {
+            const results = await this.tiktokScraper.scrapeHashtag(job.hashtag, job.limit || 5);
+            if (results.length > 0) {
+                return results[0]; // For now, just return the first one as single job result
+            }
+            throw new Error(`No results found for hashtag #${job.hashtag}`);
         }
-      };
+        // Fallback for single URL if needed, or implement scrapeUrl in TikTokScraper
+        throw new Error('Direct URL scraping not yet implemented in TikTokScraper');
     }
 
     throw new Error('Not implemented for this job type');
   }
 
-  // This would be replaced by Puppeteer/Apify later
+  // Deprecated mock method
   async fetchTikTokData(url: string): Promise<any> {
-    logger.debug(`Mock fetching: ${url}`);
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    return {
-      title: 'Mock TikTok Video',
-      stats: {
-        views: Math.floor(Math.random() * 100000),
-        likes: Math.floor(Math.random() * 5000)
-      }
-    };
+    return {};
   }
 }
-
