@@ -39,7 +39,12 @@ export class SourcingAgent {
     logger.info(`Sourcing suppliers for: ${product.title}`);
 
     // Step 1: Find potential suppliers via image search
-    const imageUrl = product.imageUrl || 'dummy_img_url';
+    const imageUrl = product.imageUrl;
+    if (!imageUrl) {
+      // We can't do visual sourcing without an image URL. Using a dummy URL would
+      // waste API calls and create confusing errors downstream.
+      return this.createRejection('Missing image URL. Cannot run supplier image search.');
+    }
     const candidates = await this.searchService.findSuppliersByImage(imageUrl);
 
     if (candidates.length === 0) {
@@ -82,7 +87,11 @@ export class SourcingAgent {
   }
 
   private processDecision(decision: LLMSourcingDecision): SourcingResult {
-    if (decision.supplier_url && decision.is_verified) {
+    // Some models omit optional fields (like `is_verified`) even when they mean
+    // "approve". Default to `true` if a supplier URL is present.
+    const isVerified = decision.is_verified ?? true;
+
+    if (decision.supplier_url && isVerified) {
       return {
         supplierUrl: decision.supplier_url,
         costPrice: decision.cost_price ?? null,

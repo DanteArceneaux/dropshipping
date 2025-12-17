@@ -69,12 +69,12 @@ FRAMEWORKS:
 TONE:
 Urgent, relatable, benefit-driven.
 
-OUTPUT FORMAT (Markdown):
-# Title
-## Headline
-[Description Body]
-- Benefit 1
-- Benefit 2
+OUTPUT FORMAT (JSON):
+{
+  "title": "string",
+  "description_md": "string (markdown)",
+  "ad_hooks": ["string", "string", "string"]
+}
 ```
 
 ## 4. Video Script Agent (UGC Scripting)
@@ -91,6 +91,11 @@ STRUCTURE:
 4. 0:20-0:30 (CTA): Strong call to action. "Link in bio" or "50% off today."
 
 FORMAT:
-[Scene Visual Description] | [Voiceover Text]
+Return JSON only:
+{
+  "scenes": [
+    { "timestamp": "0:00-0:03", "visual": "string", "audio": "string" }
+  ]
+}
 ```
 

@@ -128,7 +128,9 @@ export class YouTubeScraper {
                    let videoId = '';
                    
                    if (shortsIndex !== -1 && urlParts[shortsIndex + 1]) {
-                       videoId = urlParts[shortsIndex + 1];
+                       // Sometimes the shorts URL includes query params (e.g. /shorts/ID?si=...).
+                       // Strip them so the thumbnail URL stays valid.
+                       videoId = urlParts[shortsIndex + 1].split('?')[0];
                    } else if (link.includes('v=')) {
                        videoId = link.split('v=')[1]?.split('&')[0];
                    }
