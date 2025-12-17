@@ -1,5 +1,22 @@
 node_modules
 dist
+out
+temp
+logs
+coverage
+*.log
+
+.git
+.github
+.cursor
+
+.env
+secrets.env
+google-service-account.json
+
+public/audio
+node_modules
+dist
 .git
 .env
 
