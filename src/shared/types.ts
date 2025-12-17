@@ -33,5 +33,6 @@ export const QUEUES = {
   SOURCING: 'queue:sourcing',
   COPYWRITE: 'queue:copywrite',
   VIDEO: 'queue:video',
+  DLQ: 'queue:dlq',
 };
 

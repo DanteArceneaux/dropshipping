@@ -1,6 +1,7 @@
 import * as dotenv from 'dotenv';
 dotenv.config({ path: 'secrets.env' });
 
+import crypto from 'crypto';
 import { redis, closeRedis } from '../../shared/redis';
 import { prisma } from '../../shared/db';
 import { QUEUES } from '../../shared/types';
@@ -53,6 +54,89 @@ const videoRenderer = new VideoRenderer();
 const shopifySync = new ShopifySyncService();
 
 // ============================================================================
+// Reliability: Locks, Retries, DLQ
+// ============================================================================
+
+const JOB_LOCK_TTL_SECONDS = 10 * 60; // 10 minutes
+const MAX_STAGE_RETRIES = 3;
+const RETRY_TTL_SECONDS = 24 * 60 * 60; // 24 hours
+
+const RELEASE_LOCK_LUA = `
+  if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+  else
+    return 0
+  end
+`;
+
+type JobLock = { key: string; token: string };
+
+async function acquireJobLock(queueName: string, productId: string): Promise<JobLock | null> {
+  const key = `lock:${queueName}:${productId}`;
+  const token = crypto.randomUUID();
+
+  const result = await redis.set(key, token, 'EX', JOB_LOCK_TTL_SECONDS, 'NX');
+  if (result !== 'OK') {
+    return null;
+  }
+
+  return { key, token };
+}
+
+async function releaseJobLock(lock: JobLock): Promise<void> {
+  try {
+    await redis.eval(RELEASE_LOCK_LUA, 1, lock.key, lock.token);
+  } catch (err) {
+    logger.warn(`Failed to release lock ${lock.key}: ${err}`);
+  }
+}
+
+async function recordStageError(queueName: string, productId: string, error: unknown): Promise<void> {
+  const msg = error instanceof Error ? error.message : String(error);
+  try {
+    await prisma.agentLog.create({
+      data: {
+        agentName: 'Worker',
+        decision: 'ERROR',
+        reason: `${queueName} failed: ${msg}`,
+        productId,
+      },
+    });
+  } catch (logErr) {
+    logger.warn(`Failed to write AgentLog for ${productId}: ${logErr}`);
+  }
+}
+
+async function handleStageFailure(queueName: string, productId: string, error: unknown): Promise<void> {
+  const msg = error instanceof Error ? error.message : String(error);
+
+  await recordStageError(queueName, productId, error);
+
+  const retryKey = `retry:${queueName}:${productId}`;
+  const attempt = await redis.incr(retryKey);
+  await redis.expire(retryKey, RETRY_TTL_SECONDS);
+
+  if (attempt <= MAX_STAGE_RETRIES) {
+    const delayMs = attempt * 5000;
+    logger.warn(`[${productId}] ${queueName} failed (attempt ${attempt}/${MAX_STAGE_RETRIES}). Retrying in ${delayMs}ms: ${msg}`);
+    await new Promise((r) => setTimeout(r, delayMs));
+    await redis.lpush(queueName, productId);
+    return;
+  }
+
+  logger.error(`[${productId}] ${queueName} failed after ${attempt - 1} retries. Sending to DLQ: ${msg}`);
+  await redis.lpush(
+    QUEUES.DLQ,
+    JSON.stringify({
+      productId,
+      stage: queueName,
+      error: msg,
+      occurredAt: new Date().toISOString(),
+    })
+  );
+}
+
+// ============================================================================
 // Worker Entry Point
 // ============================================================================
 
@@ -81,21 +165,33 @@ async function startWorker() {
 }
 
 async function processJob(queueName: string, productId: string) {
-  switch (queueName) {
-    case QUEUES.DISCOVERY:
-      await handleDiscovery(productId);
-      break;
-    case QUEUES.SOURCING:
-      await handleSourcing(productId);
-      break;
-    case QUEUES.COPYWRITE:
-      await handleCopywrite(productId);
-      break;
-    case QUEUES.VIDEO:
-      await handleVideo(productId);
-      break;
-    default:
-      logger.warn(`Unknown queue: ${queueName}`);
+  const lock = await acquireJobLock(queueName, productId);
+  if (!lock) {
+    logger.warn(`[${productId}] Skipping duplicate in-flight job for ${queueName}`);
+    return;
+  }
+
+  try {
+    switch (queueName) {
+      case QUEUES.DISCOVERY:
+        await handleDiscovery(productId);
+        break;
+      case QUEUES.SOURCING:
+        await handleSourcing(productId);
+        break;
+      case QUEUES.COPYWRITE:
+        await handleCopywrite(productId);
+        break;
+      case QUEUES.VIDEO:
+        await handleVideo(productId);
+        break;
+      default:
+        logger.warn(`Unknown queue: ${queueName}`);
+    }
+  } catch (err) {
+    await handleStageFailure(queueName, productId, err);
+  } finally {
+    await releaseJobLock(lock);
   }
 }
 
